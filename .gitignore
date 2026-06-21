@@ -1,0 +1,42 @@
+# Dependency directories
+node_modules/
+client/node_modules/
+
+# Build outputs
+dist/
+client/dist/
+
+# Virtual environments
+.venv/
+server/.venv/
+venv/
+server/venv/
+ENV/
+env/
+
+# Python cache & logs
+__pycache__/
+server/__pycache__/
+*.py[cod]
+*$py.class
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Firebase & Vercel caches
+.firebase/
+client/.firebase/
+.vercel/
+client/.vercel/
+firebase-debug.log
+client/firebase-debug.log
+
+# IDEs and OS files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db

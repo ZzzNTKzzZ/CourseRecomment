@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-on-background selection:bg-primary/20;
+  }
+}
+
+@layer components {
+  .glass-nav {
+    @apply bg-surface-container-lowest/60 backdrop-blur-xl border-b border-outline-variant/15 sticky top-0 z-50;
+  }
+
+  .glass-dropdown {
+    @apply bg-surface-container-lowest/95 backdrop-blur-2xl shadow-[0px_20px_40px_rgba(25,28,30,0.06)] rounded-large border border-outline-variant/10;
+  }
+
+  .btn-primary {
+    @apply bg-primary-gradient text-white px-6 py-3 rounded-standard font-manrope font-semibold 
+           transition-all duration-300 hover:shadow-[0px_0px_20px_rgba(53,37,205,0.3)] hover:-translate-y-0.5 active:translate-y-0;
+  }
+
+  .btn-secondary {
+    @apply bg-transparent text-primary px-6 py-3 rounded-standard font-manrope font-semibold border border-outline-variant/20
+           transition-all duration-300 hover:bg-primary/5 hover:border-primary/30;
+  }
+
+  /* Tonal shifts instead of borders */
+  .tonal-card {
+    @apply bg-surface-container-lowest rounded-large transition-all duration-500
+           hover:bg-surface-bright hover:shadow-[0px_40px_80px_rgba(25,28,30,0.04)] hover:-translate-y-1;
+  }
+
+  .tonal-well {
+    @apply bg-surface-container-low rounded-large p-8;
+  }
+}
+
+/* Custom shadow for floating elements */
+.ambient-shadow {
+  box-shadow: 0px 40px 80px -10px rgba(25, 28, 30, 0.06);
+}
+
+/* Inner glow for focus states */
+.focus-glow {
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all duration-300;
+}
