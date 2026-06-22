@@ -40,3 +40,9 @@ client/firebase-debug.log
 *.swp
 .DS_Store
 Thumbs.db
+
+# Environment variables
+.env
+server/.env
+*.env
+

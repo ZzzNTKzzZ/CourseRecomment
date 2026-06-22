@@ -5,16 +5,31 @@ import math
 import time
 import urllib.parse
 import sys
+import os
 from collections import Counter, defaultdict
 
 # Fix Windows terminal encoding for emoji
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
+# --- LOAD ENVIRONMENT VARIABLES ---
+def load_dotenv(dotenv_path=".env"):
+    if os.path.exists(dotenv_path):
+        with open(dotenv_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    os.environ[key.strip()] = val.strip()
+
+load_dotenv()
+
 # --- CONFIGURATION ---
-PORT       = 8000
-DATA_FILE  = "Coursera.csv"
-USERS_FILE = "users.csv"
+PORT       = int(os.environ.get("PORT", 8000))
+DATA_FILE  = os.environ.get("DATA_FILE", "Coursera.csv")
+USERS_FILE = os.environ.get("USERS_FILE", "users.csv")
 
 # --- GLOBAL DATA ---
 courses = []
