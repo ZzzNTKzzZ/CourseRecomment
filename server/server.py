@@ -143,6 +143,11 @@ def load_users_csv():
             if not uid:
                 continue
 
+            if uid not in user_enrollments:
+                user_enrollments[uid] = set()
+            if uid not in user_ratings:
+                user_ratings[uid] = {}
+
             # enrolled_course_indices: "0|5|10|..."
             raw_idx = row.get('enrolled_course_indices', '')
             if raw_idx:
@@ -185,6 +190,77 @@ def load_users_csv():
         print(f"{'='*50}\n")
 
 
+def save_user_to_csv(user_id):
+    """Save/update a single user's history in the CSV file."""
+    global user_enrollments, user_ratings, courses
+    
+    # Get current data for this user
+    enrolled_indices = sorted(list(user_enrollments[user_id]))
+    ratings_dict = user_ratings[user_id]
+    
+    enrolled_str = "|".join(str(idx) for idx in enrolled_indices)
+    
+    enrolled_names = []
+    for idx in enrolled_indices:
+        if 0 <= idx < len(courses):
+            enrolled_names.append(courses[idx].get('Course Name', 'Unknown'))
+    enrolled_names_str = "|".join(enrolled_names)
+    
+    ratings_str = "|".join(f"{idx}:{rating}" for idx, rating in ratings_dict.items())
+    
+    # Read existing rows
+    rows = []
+    updated = False
+    fieldnames = ['user_id', 'interests', 'num_enrolled', 'num_rated', 'enrolled_course_indices', 'enrolled_course_names', 'ratings']
+    
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, mode='r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                if reader.fieldnames:
+                    fieldnames = reader.fieldnames
+        except Exception as e:
+            print(f"⚠️ Error reading {USERS_FILE} during save: {e}")
+            
+    # Update or append
+    for row in rows:
+        if row.get('user_id', '').strip() == user_id:
+            row['num_enrolled'] = str(len(enrolled_indices))
+            row['num_rated'] = str(len(ratings_dict))
+            row['enrolled_course_indices'] = enrolled_str
+            row['enrolled_course_names'] = enrolled_names_str
+            row['ratings'] = ratings_str
+            updated = True
+            break
+            
+    if not updated:
+        # Create a new row
+        new_row = {
+            'user_id': user_id,
+            'interests': '',
+            'num_enrolled': str(len(enrolled_indices)),
+            'num_rated': str(len(ratings_dict)),
+            'enrolled_course_indices': enrolled_str,
+            'enrolled_course_names': enrolled_names_str,
+            'ratings': ratings_str
+        }
+        for key in fieldnames:
+            if key not in new_row:
+                new_row[key] = ''
+        rows.append(new_row)
+        
+    # Write back to CSV
+    try:
+        with open(USERS_FILE, mode='w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"💾 [SAVE] Saved user history for '{user_id}' to {USERS_FILE}")
+    except Exception as e:
+        print(f"❌ [SAVE ERROR] Failed to save user history to {USERS_FILE}: {e}")
+
+
 def cosine_similarity(vec1, vec2):
     """Cosine similarity between two sparse TF-IDF vectors."""
     common = set(vec1.keys()) & set(vec2.keys())
@@ -208,38 +284,41 @@ def get_user_vector(user_id):
     return vec
 
 
-def user_vector_similarity(vec_a, vec_b):
-    """Cosine similarity between two user rating vectors."""
+def user_vector_similarity(vec_a, mean_a, vec_b, mean_b):
+    """Pearson correlation coefficient between two user rating vectors."""
     common = set(vec_a.keys()) & set(vec_b.keys())
     if not common:
         return 0.0
-    dot = sum(vec_a[k] * vec_b[k] for k in common)
-    norm_a = math.sqrt(sum(v**2 for v in vec_a.values()))
-    norm_b = math.sqrt(sum(v**2 for v in vec_b.values()))
-    if norm_a == 0 or norm_b == 0:
+    
+    numerator = sum((vec_a[k] - mean_a) * (vec_b[k] - mean_b) for k in common)
+    var_a = sum((vec_a[k] - mean_a)**2 for k in common)
+    var_b = sum((vec_b[k] - mean_b)**2 for k in common)
+    
+    if var_a == 0 or var_b == 0:
         return 0.0
-    return dot / (norm_a * norm_b)
+    return numerator / math.sqrt(var_a * var_b)
 
 
 def collaborative_recommend(user_id, top_n=6):
-    """User-based CF: find similar users → aggregate their highly-rated courses."""
+    """User-based CF: find similar users → aggregate their highly-rated courses using PCC."""
     target_vec = get_user_vector(user_id)
 
     if not target_vec:
         return [], "no_history"   # cold start
 
+    target_mean = sum(target_vec.values()) / len(target_vec)
+
     # Compute similarity to every other user
     similarities = []
-    for other_id, _ in list(user_ratings.items()) + []:
-        pass
     all_users = set(user_ratings.keys()) | set(user_enrollments.keys())
     all_users.discard(user_id)
 
     for other_id in all_users:
         other_vec = get_user_vector(other_id)
-        sim = user_vector_similarity(target_vec, other_vec)
+        other_mean = sum(other_vec.values()) / len(other_vec)
+        sim = user_vector_similarity(target_vec, target_mean, other_vec, other_mean)
         if sim > 0:
-            similarities.append((other_id, sim))
+            similarities.append((other_id, sim, other_mean))
 
     similarities.sort(key=lambda x: x[1], reverse=True)
     top_peers = similarities[:10]   # use top 10 similar users
@@ -248,24 +327,121 @@ def collaborative_recommend(user_id, top_n=6):
     score_accum = defaultdict(float)
     weight_accum = defaultdict(float)
 
-    for peer_id, sim in top_peers:
+    for peer_id, sim, peer_mean in top_peers:
         peer_vec = get_user_vector(peer_id)
         for course_idx, rating in peer_vec.items():
             if course_idx in target_vec:
                 continue   # user already knows this course
-            score_accum[course_idx] += sim * rating
+            # Normalize by subtracting peer mean
+            score_accum[course_idx] += sim * (rating - peer_mean)
             weight_accum[course_idx] += sim
 
     if not score_accum:
         return [], "no_peers"
 
-    # Predicted rating = weighted average
-    predicted = {
-        idx: score_accum[idx] / weight_accum[idx]
-        for idx in score_accum
-    }
+    # Predicted rating = target_mean + (weighted average of normalized ratings)
+    predicted = {}
+    for idx in score_accum:
+        pred_val = target_mean + (score_accum[idx] / weight_accum[idx])
+        # Clip to [1.0, 5.0]
+        predicted[idx] = max(1.0, min(5.0, pred_val))
 
     sorted_courses = sorted(predicted.items(), key=lambda x: x[1], reverse=True)
+    return sorted_courses[:top_n], "ok"
+
+
+def hybrid_recommend(user_id, top_n=6, alpha=0.5):
+    """Hybrid recommendation combining User-Based CF and Content-Based Filtering.
+    Score = alpha * normalized_CF_rating + (1 - alpha) * Content_similarity
+    """
+    global user_ratings, user_enrollments, courses, tfidf_matrix
+    
+    target_vec = get_user_vector(user_id)
+    if not target_vec:
+        return [], "no_history"
+        
+    # --- 1. COLLABORATIVE FILTERING COMPONENT ---
+    target_mean = sum(target_vec.values()) / len(target_vec)
+    
+    similarities = []
+    all_users = set(user_ratings.keys()) | set(user_enrollments.keys())
+    all_users.discard(user_id)
+    
+    for other_id in all_users:
+        other_vec = get_user_vector(other_id)
+        other_mean = sum(other_vec.values()) / len(other_vec)
+        sim = user_vector_similarity(target_vec, target_mean, other_vec, other_mean)
+        if sim > 0:
+            similarities.append((other_id, sim, other_mean))
+            
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    top_peers = similarities[:10]
+    
+    cf_predictions = {}
+    if top_peers:
+        score_accum = defaultdict(float)
+        weight_accum = defaultdict(float)
+        
+        for peer_id, sim, peer_mean in top_peers:
+            peer_vec = get_user_vector(peer_id)
+            for course_idx, rating in peer_vec.items():
+                if course_idx in target_vec:
+                    continue
+                score_accum[course_idx] += sim * (rating - peer_mean)
+                weight_accum[course_idx] += sim
+                
+        for idx in score_accum:
+            pred_val = target_mean + (score_accum[idx] / weight_accum[idx])
+            pred_val = max(1.0, min(5.0, pred_val))
+            # Normalize to 0.0 - 1.0 range
+            cf_predictions[idx] = (pred_val - 1.0) / 4.0
+
+    # --- 2. CONTENT-BASED COMPONENT ---
+    # Build user profile vector by averaging the TF-IDF vectors of their history, weighted by rating
+    user_profile = defaultdict(float)
+    total_weight = 0.0
+    for idx, rating in target_vec.items():
+        if 0 <= idx < len(tfidf_matrix):
+            # Higher ratings give more weight to the course vector
+            weight = rating
+            total_weight += weight
+            for word, val in tfidf_matrix[idx].items():
+                user_profile[word] += val * weight
+                
+    if total_weight > 0:
+        for word in user_profile:
+            user_profile[word] /= total_weight
+            
+        # Normalize the profile vector
+        norm = math.sqrt(sum(val**2 for val in user_profile.values()))
+        if norm > 0:
+            user_profile = {k: v / norm for k, v in user_profile.items()}
+    else:
+        user_profile = {}
+
+    # --- 3. COMBINE BOTH ---
+    hybrid_scores = {}
+    
+    # Calculate for all unseen courses
+    for idx in range(len(courses)):
+        if idx in target_vec:
+            continue
+            
+        # CF score
+        cf_score = cf_predictions.get(idx, 0.0) # default to 0 if not predicted by peers
+        
+        # Content score
+        content_score = 0.0
+        if user_profile and idx < len(tfidf_matrix):
+            content_score = cosine_similarity(user_profile, tfidf_matrix[idx])
+            
+        # Hybrid combination
+        hybrid_scores[idx] = alpha * cf_score + (1.0 - alpha) * content_score
+        
+    if not hybrid_scores:
+        return [], "no_recs"
+        
+    sorted_courses = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)
     return sorted_courses[:top_n], "ok"
 
 
@@ -328,6 +504,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             user_enrollments[user_id].add(int(course_idx))
+            save_user_to_csv(user_id)
             print(f"📌 [ENROLL] user='{user_id}' course_idx={course_idx}")
             self.send_json_response(200, {"status": "enrolled", "user_id": user_id, "course_idx": course_idx})
 
@@ -353,6 +530,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
 
             user_ratings[user_id][int(course_idx)] = rating
             user_enrollments[user_id].add(int(course_idx))   # auto-enroll
+            save_user_to_csv(user_id)
             print(f"⭐ [RATE] user='{user_id}' course_idx={course_idx} rating={rating}")
             self.send_json_response(200, {"status": "rated", "user_id": user_id, "course_idx": course_idx, "rating": rating})
 
@@ -373,6 +551,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         # GET /recommend/user?user_id=X  (user-based CF, new)
         elif parsed_url.path == "/recommend/user":
             self._handle_user_recommend(query_params)
+
+        # GET /recommend/hybrid?user_id=X (hybrid content + CF)
+        elif parsed_url.path == "/recommend/hybrid":
+            self._handle_hybrid_recommend(query_params)
 
         # GET /profile?user_id=X  — returns enrolled + rated courses
         elif parsed_url.path == "/profile":
@@ -432,29 +614,18 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
 
         results, status = collaborative_recommend(user_id)
 
-        if status == "no_history":
-            self.send_json_response(200, {
-                "mode": "user_based",
-                "user_id": user_id,
-                "status": "cold_start",
-                "message": "No interaction history yet. Enroll in or rate some courses first!",
-                "recommendations": []
-            })
-            return
-
-        if status == "no_peers":
-            # Fallback: return popular courses (highest-rated in CSV)
+        if status == "no_history" or status == "no_peers":
             sorted_by_rating = sorted(
                 range(len(courses)),
                 key=lambda i: safe_float(courses[i].get('Course Rating')),
                 reverse=True
             )
-            recs = [build_course_response(i, 0.0, "predicted_rating") for i in sorted_by_rating[:6]]
+            recs = [build_course_response(i, safe_float(courses[i].get('Course Rating')), "predicted_rating") for i in sorted_by_rating[:6]]
             self.send_json_response(200, {
                 "mode": "user_based",
                 "user_id": user_id,
-                "status": "popular_fallback",
-                "message": "Not enough peers found. Here are the top-rated courses!",
+                "status": "cold_start" if status == "no_history" else "popular_fallback",
+                "message": "No history yet. Showing popular courses!" if status == "no_history" else "Not enough peers found. Showing popular courses!",
                 "recommendations": recs
             })
             return
@@ -469,6 +640,45 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         ms = (time.time() - start_time) * 1000
         print(f"✨ [USER-CF] Sent {len(recs)} results for '{user_id}' ({ms:.1f}ms)")
 
+    def _handle_hybrid_recommend(self, query_params):
+        start_time = time.time()
+        user_id = query_params.get('user_id', [None])[0]
+
+        if not user_id:
+            self.send_error_response(400, "Missing user_id")
+            return
+
+        user_id = user_id.strip()
+        print(f"🧬 [HYBRID] Recommending for user='{user_id}'")
+
+        results, status = hybrid_recommend(user_id)
+
+        if status == "no_history" or status == "no_recs":
+            sorted_by_rating = sorted(
+                range(len(courses)),
+                key=lambda i: safe_float(courses[i].get('Course Rating')),
+                reverse=True
+            )
+            recs = [build_course_response(i, safe_float(courses[i].get('Course Rating')) / 5.0, "score") for i in sorted_by_rating[:6]]
+            self.send_json_response(200, {
+                "mode": "hybrid",
+                "user_id": user_id,
+                "status": "cold_start" if status == "no_history" else "popular_fallback",
+                "message": "No history yet. Showing popular courses!" if status == "no_history" else "Showing popular courses.",
+                "recommendations": recs
+            })
+            return
+
+        recs = [build_course_response(i, s, "score") for i, s in results]
+        self.send_json_response(200, {
+            "mode": "hybrid",
+            "user_id": user_id,
+            "status": "ok",
+            "recommendations": recs
+        })
+        ms = (time.time() - start_time) * 1000
+        print(f"✨ [HYBRID] Sent {len(recs)} results for '{user_id}' ({ms:.1f}ms)")
+
     def _handle_profile(self, query_params):
         user_id = query_params.get('user_id', [None])[0]
         if not user_id:
@@ -476,6 +686,12 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             return
 
         user_id = user_id.strip()
+        is_new_user = user_id not in user_enrollments and user_id not in user_ratings
+        if is_new_user:
+            user_enrollments[user_id] = set()
+            user_ratings[user_id] = {}
+            save_user_to_csv(user_id)
+
         enrolled = list(user_enrollments[user_id])
         rated = user_ratings[user_id]
 
@@ -489,6 +705,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 "level": row.get('Difficulty Level', 'Unknown'),
                 "rating": row.get('Course Rating', '0.0'),
                 "url": row.get('Course URL', '#'),
+                "description": row.get('Course Description', ''),
+                "skills": row.get('Skills', ''),
                 "user_rating": rated.get(idx, None)
             })
 

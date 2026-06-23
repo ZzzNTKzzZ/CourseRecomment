@@ -116,8 +116,10 @@ function App() {
   const [userId, setUserId] = useState(null);
   const [showLogin, setShowLogin] = useState(true);
 
-  const [mode, setMode] = useState('explore'); // 'explore' | 'foryou'
-  const [courses, setCourses] = useState([]);
+  const [mode, setMode] = useState('explore'); // 'explore' | 'foryou' | 'history' | 'hybrid'
+  const [exploreCourses, setExploreCourses] = useState([]);
+  const [forYouCourses, setForYouCourses] = useState([]);
+  const [hybridCourses, setHybridCourses] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
@@ -135,6 +137,7 @@ function App() {
   const handleLogin = (name) => {
     setUserId(name);
     setShowLogin(false);
+    setMode('history');
   };
 
   // ── Fetch user profile on login ──
@@ -170,11 +173,11 @@ function App() {
         throw new Error("Failed to fetch recommendations.");
       }
       const data = await res.json();
-      setCourses(data.recommendations || []);
+      setExploreCourses(data.recommendations || []);
       setHasSearched(true);
     } catch (err) {
       setError(err.message);
-      setCourses([]);
+      setExploreCourses([]);
     } finally {
       setIsLoading(false);
     }
@@ -191,13 +194,36 @@ function App() {
       const res = await fetch(`/api/recommend/user?user_id=${encodeURIComponent(userId)}`);
       if (!res.ok) throw new Error("Failed to fetch personalised recommendations.");
       const data = await res.json();
-      setCourses(data.recommendations || []);
+      setForYouCourses(data.recommendations || []);
       setCfStatus(data.status);
       setCfMessage(data.message || '');
       setHasSearched(true);
     } catch (err) {
       setError(err.message);
-      setCourses([]);
+      setForYouCourses([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [userId]);
+
+  // ── Hybrid CF + Content ──
+  const handleHybrid = useCallback(async () => {
+    if (!userId) return;
+    setMode('hybrid');
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/recommend/hybrid?user_id=${encodeURIComponent(userId)}`);
+      if (!res.ok) throw new Error("Failed to fetch hybrid recommendations.");
+      const data = await res.json();
+      setHybridCourses(data.recommendations || []);
+      setCfStatus(data.status);
+      setCfMessage(data.message || '');
+      setHasSearched(true);
+    } catch (err) {
+      setError(err.message);
+      setHybridCourses([]);
     } finally {
       setIsLoading(false);
     }
@@ -232,6 +258,11 @@ function App() {
     } catch { /* ignore */ }
   }, [userId, refreshProfile]);
 
+  const isCompact = hasSearched || mode === 'history' || mode === 'foryou' || mode === 'hybrid';
+  const displayCourses = mode === 'history' 
+    ? userHistory 
+    : (mode === 'foryou' ? forYouCourses : (mode === 'hybrid' ? hybridCourses : exploreCourses));
+
   return (
     <div className="min-h-screen pb-20 bg-background text-on-background">
       {showLogin && <LoginModal onLogin={handleLogin} />}
@@ -242,15 +273,15 @@ function App() {
         {/* Hero + Mode Tabs */}
         <motion.div
           animate={{
-            paddingTop: hasSearched ? '2rem' : '10vh',
-            paddingBottom: hasSearched ? '1rem' : '4rem'
+            paddingTop: isCompact ? '2rem' : '10vh',
+            paddingBottom: isCompact ? '1rem' : '4rem'
           }}
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
         >
-          <HeroSearch onSearch={handleSearch} isCompact={hasSearched} isLoading={isLoading && mode === 'explore'} />
+          <HeroSearch onSearch={handleSearch} isCompact={isCompact} isLoading={isLoading && mode === 'explore'} />
 
-          {/* Mode Tabs (show after first interaction) */}
-          {hasSearched && (
+          {/* Mode Tabs */}
+          {userId && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -261,14 +292,28 @@ function App() {
                 onClick={() => setMode('explore')}
                 icon={BookOpen}
                 label="Explore"
-                badge={mode === 'explore' && courses.length ? courses.length : null}
+                badge={mode === 'explore' && exploreCourses.length ? exploreCourses.length : null}
+              />
+              <ModeTab
+                active={mode === 'history'}
+                onClick={() => setMode('history')}
+                icon={User}
+                label="My History"
+                badge={userHistory.length > 0 ? `${userHistory.length}` : null}
               />
               <ModeTab
                 active={mode === 'foryou'}
                 onClick={handleForYou}
                 icon={Users}
-                label="For You"
-                badge={enrolledSet.size > 0 ? `${enrolledSet.size} saved` : null}
+                label="Collaborative"
+                badge={null}
+              />
+              <ModeTab
+                active={mode === 'hybrid'}
+                onClick={handleHybrid}
+                icon={Sparkles}
+                label="AI Hybrid"
+                badge={null}
               />
             </motion.div>
           )}
@@ -306,7 +351,7 @@ function App() {
                   <p className="text-on-background/60">{error}</p>
                 </div>
                 <button
-                  onClick={() => mode === 'foryou' ? handleForYou() : handleSearch(lastQuery)}
+                  onClick={() => mode === 'foryou' ? handleForYou() : (mode === 'hybrid' ? handleHybrid() : handleSearch(lastQuery))}
                   className="text-primary font-manrope font-bold hover:underline flex items-center gap-2"
                 >
                   <RefreshCw size={14} /> Try again
@@ -314,7 +359,7 @@ function App() {
               </motion.div>
             )}
 
-            {hasSearched && !isLoading && !error && (
+            {isCompact && !isLoading && !error && (
               <motion.div
                 key="results"
                 initial={{ opacity: 0, y: 20 }}
@@ -328,24 +373,39 @@ function App() {
                       <h3 className="font-manrope font-extrabold text-2xl text-on-background">
                         {mode === 'foryou' ? (
                           <>
-                            <span className="text-primary">Personalised</span> For You
-                            <span className="text-on-background/20 font-medium ml-2">({courses.length})</span>
+                            <span className="text-primary">Collaborative</span> Recommendations
+                            <span className="text-on-background/20 font-medium ml-2">({forYouCourses.length})</span>
+                          </>
+                        ) : mode === 'hybrid' ? (
+                          <>
+                            <span className="text-primary">AI Hybrid</span> Recommendations
+                            <span className="text-on-background/20 font-medium ml-2">({hybridCourses.length})</span>
+                          </>
+                        ) : mode === 'history' ? (
+                          <>
+                            My Learning <span className="text-primary">History</span>
+                            <span className="text-on-background/20 font-medium ml-2">({userHistory.length})</span>
                           </>
                         ) : (
                           <>
                             Top Recommendations
-                            <span className="text-on-background/20 font-medium ml-2">({courses.length})</span>
+                            <span className="text-on-background/20 font-medium ml-2">({exploreCourses.length})</span>
                           </>
                         )}
                       </h3>
-                      {mode === 'foryou' && cfStatus === 'cold_start' && (
+                      {(mode === 'foryou' || mode === 'hybrid') && cfStatus === 'cold_start' && (
                         <p className="text-xs text-on-background/40 font-inter">
-                          💡 Rate or enroll in courses to unlock collaborative recommendations
+                          💡 Rate or enroll in courses to unlock AI-powered recommendations
                         </p>
                       )}
-                      {mode === 'foryou' && cfStatus === 'popular_fallback' && (
+                      {(mode === 'foryou' || mode === 'hybrid') && cfStatus === 'popular_fallback' && (
                         <p className="text-xs text-secondary/70 font-inter">
                           🔥 Showing trending courses — add more ratings to improve suggestions
+                        </p>
+                      )}
+                      {mode === 'history' && userHistory.length === 0 && (
+                        <p className="text-xs text-on-background/40 font-inter">
+                          📚 You haven't registered or rated any courses yet. Explore courses to get started!
                         </p>
                       )}
                     </div>
@@ -379,9 +439,9 @@ function App() {
                   layout
                   className={`grid gap-8 ${viewMode === 'grid' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : 'grid-cols-1'}`}
                 >
-                  {courses.map((course, idx) => (
+                  {displayCourses.map((course, idx) => (
                     <CourseCard
-                      key={idx}
+                      key={course.course_idx}
                       course={course}
                       mode={mode}
                       isEnrolled={enrolledSet.has(course.course_idx)}
@@ -398,7 +458,7 @@ function App() {
       </main>
 
       {/* Floating AI Toast */}
-      {hasSearched && (
+      {isCompact && (
         <div className="fixed bottom-8 right-8 z-50">
           <GlassCard className="p-4 ambient-shadow flex items-center gap-4 border-primary/20 bg-primary/5">
             <div className="w-10 h-10 bg-primary-gradient rounded-full flex items-center justify-center text-white">

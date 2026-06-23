@@ -39,13 +39,14 @@ export const CourseCard = ({ course, mode, isEnrolled, userRating, onEnroll, onR
 
   // Content-based → show cosine score %; User-CF → show predicted rating
   const isUserMode = mode === 'foryou';
+  const isHistoryMode = mode === 'history';
   const scoreValue = isUserMode
     ? course.predicted_rating
-    : course.score;
+    : (isHistoryMode ? null : course.score);
 
   const badgeLabel = isUserMode
     ? `${(scoreValue || 0).toFixed(2)} predicted`
-    : `${Math.round((scoreValue || 0) * 100)}% Match`;
+    : (isHistoryMode ? null : `${Math.round((scoreValue || 0) * 100)}% Match`);
 
   const BadgeIcon = isUserMode ? TrendingUp : Sparkles;
 
@@ -68,10 +69,12 @@ export const CourseCard = ({ course, mode, isEnrolled, userRating, onEnroll, onR
       className="tonal-card p-6 flex flex-col h-full group cursor-pointer relative overflow-hidden"
     >
       {/* Score Badge */}
-      <div className="absolute top-0 right-0 px-3 py-1 bg-primary/10 text-primary font-manrope font-bold text-[10px] uppercase rounded-bl-large flex items-center gap-1">
-        <BadgeIcon size={10} />
-        <span>{badgeLabel}</span>
-      </div>
+      {badgeLabel && (
+        <div className="absolute top-0 right-0 px-3 py-1 bg-primary/10 text-primary font-manrope font-bold text-[10px] uppercase rounded-bl-large flex items-center gap-1">
+          <BadgeIcon size={10} />
+          <span>{badgeLabel}</span>
+        </div>
+      )}
 
       {/* Tags Row */}
       <div className="flex items-start justify-between mb-6">
